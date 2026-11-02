@@ -50,8 +50,8 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
   int priority;                // Process priority
-  struct proc *rq_next         // Pointer to the next process in the ready queue
-
+  struct proc *rq_next;         // Pointer to the next process in the ready queue
+};
 // Process memory is laid out contiguously, low addresses first:
 //   text
 //   original data and bss
