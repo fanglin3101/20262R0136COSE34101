@@ -12,6 +12,67 @@ struct {
   struct proc proc[NPROC];
 } ptable;
 
+// Head of the priority-based ready queue
+static struct proc *ready_head = 0;
+
+// R2: Insert a process into the ready queue
+static void
+enqueue_ready(struct proc *p)
+{
+  struct proc **curr = &ready_head; // Start from the head of the queue
+
+  if(p == 0 || p->state != RUNNABLE)
+    return;
+
+  while(*curr != 0){
+    if(p->priority < (*curr)->priority)
+      break; // Lower priority value runs first
+
+    if(p->priority == (*curr)->priority &&
+       p->pid > (*curr)->pid)
+      break; // If same priority, larger PID runs first
+
+    curr = &(*curr)->rq_next; // Move to the next position
+  }
+
+  // Insert the new process into the queue at correct position
+  p->rq_next = *curr; 
+  *curr = p;
+}
+
+// R2: Remove and return the first process in the ready queue
+static struct proc*
+dequeue_ready(void)
+{
+  struct proc *p = ready_head;
+
+  if(p == 0)
+    return 0;  // Queue is empty
+
+  ready_head = p->rq_next;  // Move head to the next process
+  p->rq_next = 0;           // Remove the link from this process
+
+  return p;
+}
+
+// R2: Remove a specific process from the ready queue
+static void
+remove_ready(struct proc *p)
+{
+  struct proc **curr = &ready_head;
+
+  // Search for the process in the queue
+  while(*curr != 0){
+    if(*curr == p){
+      *curr = p->rq_next;  // Remove process from queue
+      p->rq_next = 0;      // Clear its next pointer
+      return;
+    }
+
+    curr = &(*curr)->rq_next;  // Move to next process
+  }
+}
+
 static struct proc *initproc;
 
 int nextpid = 1;
@@ -91,6 +152,7 @@ found:
 
   // Initialize the process with a default priority
   p->priority = 10;
+  p->rq_next = 0;  // Initialize ready queue pointer
 
   release(&ptable.lock);
 
