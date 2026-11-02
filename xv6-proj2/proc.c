@@ -216,6 +216,7 @@ userinit(void)
   acquire(&ptable.lock);
 
   p->state = RUNNABLE;
+  enqueue_ready(p);  // R2: insert initial process into ready queue
 
   release(&ptable.lock);
 }
@@ -288,6 +289,7 @@ fork(void)
   acquire(&ptable.lock);
 
   np->state = RUNNABLE;
+  enqueue_ready(np);  // R2: insert child process into ready queue
 
   release(&ptable.lock);
 
@@ -392,6 +394,7 @@ wait(void)
 //  - swtch to start running that process
 //  - eventually that process transfers control
 //      via swtch back to the scheduler.
+
 void
 scheduler(void)
 {
@@ -403,12 +406,12 @@ scheduler(void)
     // Enable interrupts on this processor.
     sti();
 
-    // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
 
+    // R2: Select the highest-priority process from the ready queue
+    p = dequeue_ready();
+
+    if(p != 0){
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
@@ -427,6 +430,7 @@ scheduler(void)
 
   }
 }
+
 
 // Enter scheduler.  Must hold only ptable.lock
 // and have changed proc->state. Saves and restores
@@ -460,6 +464,7 @@ yield(void)
 {
   acquire(&ptable.lock);  //DOC: yieldlock
   myproc()->state = RUNNABLE;
+  enqueue_ready(myproc());  // R2: Put process back into ready queue
   sched();
   release(&ptable.lock);
 }
@@ -532,9 +537,12 @@ wakeup1(void *chan)
 {
   struct proc *p;
 
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state == SLEEPING && p->chan == chan){
       p->state = RUNNABLE;
+      enqueue_ready(p);  // Add awakened process to ready queue
+    }
+  }
 }
 
 // Wake up all processes sleeping on chan.
@@ -559,8 +567,10 @@ kill(int pid)
     if(p->pid == pid){
       p->killed = 1;
       // Wake process from sleep if necessary.
-      if(p->state == SLEEPING)
+      if(p->state == SLEEPING){
         p->state = RUNNABLE;
+        enqueue_ready(p);  // R2: add awakened process to ready queue
+      }
       release(&ptable.lock);
       return 0;
     }
@@ -616,7 +626,17 @@ setnice(int pid, int nice)
   acquire(&ptable.lock);
   for( p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->pid==pid){
+      
+      // R2: Remove RUNNABLE process before changing its priority
+      if(p->state == RUNNABLE)
+        remove_ready(p);
+
       p->priority = nice;
+
+      // R2: Reinsert process according to its new priority
+      if(p->state == RUNNABLE)
+        enqueue_ready(p);
+      
       release(&ptable.lock);
       return 0;
     }
