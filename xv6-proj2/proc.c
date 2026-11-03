@@ -15,6 +15,9 @@ struct {
 // Head of the priority-based ready queue
 static struct proc *ready_head = 0;
 
+// R3: Flag to request rescheduling
+int need_resched = 0;
+
 // R2: Insert a process into the ready queue
 static void
 enqueue_ready(struct proc *p)
@@ -70,6 +73,21 @@ remove_ready(struct proc *p)
     }
 
     curr = &(*curr)->rq_next;  // Move to next process
+  }
+}
+
+// R3: Check if rescheduling is needed
+static void
+check_resched(void)
+{
+  struct proc *cur = myproc();
+
+  // Compare priorities using the ready queue
+  if(cur != 0 && cur->state == RUNNING && ready_head != 0){
+    if(ready_head->priority < cur->priority ||
+       (ready_head->priority == cur->priority &&
+        ready_head->pid > cur->pid))
+      need_resched = 1;
   }
 }
 
@@ -289,7 +307,10 @@ fork(void)
   acquire(&ptable.lock);
 
   np->state = RUNNABLE;
-  enqueue_ready(np);  // R2: insert child process into ready queue
+    enqueue_ready(np);  // R2: Insert child process into ready queue
+
+  // R3: Check if the new child should trigger rescheduling
+  check_resched();
 
   release(&ptable.lock);
 
@@ -541,6 +562,9 @@ wakeup1(void *chan)
     if(p->state == SLEEPING && p->chan == chan){
       p->state = RUNNABLE;
       enqueue_ready(p);  // Add awakened process to ready queue
+      
+      // R3: Check whether the awakened process requires rescheduling
+      check_resched();
     }
   }
 }
@@ -636,7 +660,10 @@ setnice(int pid, int nice)
       // R2: Reinsert process according to its new priority
       if(p->state == RUNNABLE)
         enqueue_ready(p);
-      
+
+      // R3: Check whether the priority change requires rescheduling
+      check_resched();
+
       release(&ptable.lock);
       return 0;
     }
