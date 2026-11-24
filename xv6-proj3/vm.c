@@ -6,6 +6,8 @@
 #include "mmu.h"
 #include "proc.h"
 #include "elf.h"
+// Software-defined flag for Copy-on-Write pages
+#define PTE_COW 0x800
 
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
@@ -332,8 +334,9 @@ copyuvm(pde_t *pgdir, uint sz)
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
 
-    // Make the shared page read-only
-    flags &= ~PTE_W;
+    // Mark writable pages as Copy-on-Write
+    if(flags & PTE_W)
+      flags = (flags & ~PTE_W) | PTE_COW;
 
     // Map the child to the same physical page as parent
     if(mappages(d, (void*)i, PGSIZE, pa, flags) < 0)
@@ -342,8 +345,8 @@ copyuvm(pde_t *pgdir, uint sz)
     // Increase reference count for the shared page
     inc_refcount(pa);
 
-    // Make the parent's page read-only
-    *pte &= ~PTE_W;
+    // Apply the same permissions to the parent
+    *pte = pa | flags;
   }
 
   // Flush the parent's TLB after changing permissions
@@ -401,13 +404,57 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 void
 page_fault(void)
 {
+  struct proc *p = myproc();
   uint va = rcr2();
-  if(va < 0) {
-    panic("Invalid access");
+  uint pa, flags;
+  pte_t *pte;
+  char *mem;
+
+  // Check for invalid access
+  if(p == 0)
+    panic("page_fault: no process"); // invalid, won't perform CoW
+
+  if(va >= p->sz || va >= KERNBASE){
+    p->killed = 1;
     return;
   }
-  
-  return;
+
+  // Find the Copy-on-Write page
+  pte = walkpgdir(p->pgdir, (void*)va, 0);
+  if(pte == 0 || !(*pte & PTE_P) || !(*pte & PTE_U) ||
+     !(*pte & PTE_COW) || !(p->tf->err & 0x2)){
+    p->killed = 1;
+    return;
+  }
+
+  pa = PTE_ADDR(*pte);
+  flags = PTE_FLAGS(*pte);
+
+  // Case A: Reference count > 1
+  if(get_refcount(pa) > 1){
+    // Copy the page if it is shared
+    if((mem = kalloc()) == 0){
+      p->killed = 1;
+      return;
+    }
+
+    memmove(mem, (char*)P2V(pa), PGSIZE);
+    *pte = V2P(mem) | ((flags | PTE_W) & ~PTE_COW);
+    kfree((char*)P2V(pa));
+  }
+
+  // Case B: Reference count = 1
+  else if(get_refcount(pa) == 1){
+    // Make the page writable if only one reference remains
+    *pte = pa | ((flags | PTE_W) & ~PTE_COW);
+  }
+  else {
+    p->killed = 1;
+    return;
+  }
+
+  // Flush TLB
+  lcr3(V2P(p->pgdir));
 }
 
 //PAGEBREAK!
