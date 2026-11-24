@@ -108,14 +108,21 @@ kalloc(void)
 
   if(kmem.use_lock)
     acquire(&kmem.lock);
+
   r = kmem.freelist;
-  if(r)
+
+  if(r){
     kmem.freelist = r->next;
 
-  pmem.num_free_pages--;
+    // Set reference count to 1 for a newly allocated page
+    pmem.refcount[V2P(r) >> PGSHIFT] = 1;
+
+    pmem.num_free_pages--;
+  }
 
   if(kmem.use_lock)
     release(&kmem.lock);
+
   return (char*)r;
 }
 
@@ -138,9 +145,18 @@ inc_refcount(uint pa)
   pmem.refcount[pa >> PGSHIFT]++; // Increases the count when another reference is added
 }
 
-void  
+void
 dec_refcount(uint pa)
 {
-  pmem.refcount[pa >> PGSHIFT]--; // 	Decreases the count when a reference is removed
-}
+  if(kmem.use_lock)
+    acquire(&kmem.lock);
 
+  // Prevent reference count from becoming negative
+  if(pmem.refcount[pa >> PGSHIFT] == 0)
+    panic("dec_refcount");
+
+  pmem.refcount[pa >> PGSHIFT]--;
+
+  if(kmem.use_lock)
+    release(&kmem.lock);
+}
