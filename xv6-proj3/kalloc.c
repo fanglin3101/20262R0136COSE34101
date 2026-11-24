@@ -38,16 +38,20 @@ kinit1(void *vstart, void *vend)
 {
   initlock(&kmem.lock, "kmem");
   kmem.use_lock = 0;
+  
+  // Initialize reference counters and free-page counter
+  memset(pmem.refcount, 0, sizeof(pmem.refcount));
+  pmem.num_free_pages = 0;
+
   freerange(vstart, vend);
 }
 
 void
 kinit2(void *vstart, void *vend)
 {
+  // Add remaining physical pages to the freelist
   freerange(vstart, vend);
   kmem.use_lock = 1;
-  memset(&pmem.refcount, 0, sizeof(uint) * (PHYSTOP >> PGSHIFT));
-  pmem.num_free_pages = 0;
 }
 
 void
@@ -67,20 +71,28 @@ void
 kfree(char *v)
 {
   struct run *r;
+  uint pa = V2P(v); // Get the physical address
 
-  if((uint)v % PGSIZE || v < end || V2P(v) >= PHYSTOP)
+  if((uint)v % PGSIZE || v < end || pa >= PHYSTOP)
     panic("kfree");
-
-  // Fill with junk to catch dangling refs.
-  memset(v, 1, PGSIZE);
 
   if(kmem.use_lock)
     acquire(&kmem.lock);
-  r = (struct run*)v;
-  r->next = kmem.freelist;
-  kmem.freelist = r;
 
-  pmem.num_free_pages++;
+  // Decrease reference count if the page is in use
+  if(pmem.refcount[pa >> PGSHIFT] > 0)
+    pmem.refcount[pa >> PGSHIFT]--;
+
+  // Only free the page when no references remain
+  if(pmem.refcount[pa >> PGSHIFT] == 0){ // When reference count = 0
+    memset(v, 1, PGSIZE);
+
+    r = (struct run*)v;
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+
+    pmem.num_free_pages++;
+  }
 
   if(kmem.use_lock)
     release(&kmem.lock);
@@ -110,23 +122,25 @@ kalloc(void)
 int
 freemem(void)
 {
-  return pmem.num_free_pages;
+  return pmem.num_free_pages; 
 }
 
 uint
 get_refcount(uint pa)
 {
-  return 0;
+  return pmem.refcount[pa >> PGSHIFT]; // Return the reference count of a physical page
 }
+
 
 void
 inc_refcount(uint pa)
 {
-  return;
+  pmem.refcount[pa >> PGSHIFT]++; // Increases the count when another reference is added
 }
 
 void  
 dec_refcount(uint pa)
 {
-  return;
+  pmem.refcount[pa >> PGSHIFT]--; // 	Decreases the count when a reference is removed
 }
+
